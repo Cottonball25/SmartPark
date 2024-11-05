@@ -1,0 +1,127 @@
+import tkinter as tk
+from PIL import Image, ImageTk
+from tkinter import messagebox
+
+
+class KioskApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Kiosk App")
+
+        # Set a larger window size
+        self.root.geometry("400x600")
+
+        # Set the background color to dark blue
+        self.root.configure(bg="#002147")  # Dark blue color
+
+        # Load the PNG image
+        self.image = Image.open("SmartCar.png")  # Ensure the image is in the same directory or provide the full path
+        self.photo = ImageTk.PhotoImage(self.image)
+
+        # Create a header frame for the image
+        header_frame = tk.Frame(root, bg="#002147")
+        header_frame.pack(pady=10)
+
+        # Display the image
+        self.image_label = tk.Label(header_frame, image=self.photo, bg="#FFA07A")  # Set background to match
+        self.image_label.pack()
+
+        # Create a frame for input fields
+        input_frame = tk.Frame(root, bg="#FFA07A", padx=20, pady=20)  # Add padding
+        input_frame.pack(pady=10)
+
+        # Create input fields dimensions
+        self.name_label = tk.Label(input_frame, text="Name:", font=("Arial", 12), bg="#FFA07A", fg="white")
+        self.name_label.grid(row=0, column=0, sticky="w", padx=5, pady=5)
+        self.name_entry = tk.Entry(input_frame, font=("Arial", 12), width=30)
+        self.name_entry.grid(row=0, column=1, padx=5, pady=5)
+
+        self.phone_label = tk.Label(input_frame, text="Phone Number:", font=("Arial", 12), bg="#FFA07A", fg="white")
+        self.phone_label.grid(row=1, column=0, sticky="w", padx=5, pady=5)
+        self.phone_entry = tk.Entry(input_frame, font=("Arial", 12), width=30)
+        self.phone_entry.grid(row=1, column=1, padx=5, pady=5)
+
+        self.license_label = tk.Label(input_frame, text="License Plate:", font=("Arial", 12), bg="#FFA07A", fg="white")
+        self.license_label.grid(row=2, column=0, sticky="w", padx=5, pady=5)
+        self.license_entry = tk.Entry(input_frame, font=("Arial", 12), width=30)
+        self.license_entry.grid(row=2, column=1, padx=5, pady=5)
+
+        # Create a frame for buttons
+        button_frame = tk.Frame(root, bg="#002147")  # Set background color for the buttons
+        button_frame.pack(pady=10)
+
+        # Create buttons
+        self.park_button = tk.Button(button_frame, text="Park Car", command=self.park_car, font=("Arial", 14), width=15,
+                                     bg="#002147", fg="white", relief="raised", bd=2)
+        self.park_button.grid(row=0, column=0, padx=10, pady=10)
+
+        self.retrieve_button = tk.Button(button_frame, text="Retrieve Car", command=self.retrieve_car,
+                                         font=("Arial", 14), width=15, bg="#002147", fg="white", relief="raised", bd=2)
+        self.retrieve_button.grid(row=0, column=1, padx=10, pady=10)
+
+        # Initialize a dictionary to store parking information
+        self.parking_data = {}
+        self.available_spots = [f"Spot {i}" for i in range(1, 11)]  # Create 10 available parking spots
+
+        # Create a footer label for the welcome message
+        footer_frame = tk.Frame(root, bg="#002147")  # Set background color
+        footer_frame.pack(side="bottom", pady=10)
+
+        self.welcome_label = tk.Label(footer_frame, text="Welcome to Smart Park Kiosk", font=("Arial", 12),
+                                      bg="#002147", fg="white")
+        self.welcome_label.pack()
+
+    def park_car(self):
+        self.submit_data("Park Car")
+
+    def retrieve_car(self):
+        self.submit_data("Retrieve Car")
+
+    def submit_data(self, action):
+        name = self.name_entry.get()
+        phone = self.phone_entry.get()
+        license_plate = self.license_entry.get()
+
+        if not name or not phone or not license_plate:
+            messagebox.showwarning("Input Error", "Please fill out all fields.")
+            return
+
+        if action == "Park Car":
+            if license_plate in self.parking_data:
+                messagebox.showwarning("Error", "This car is already parked.")
+                return
+
+            if not self.available_spots:
+                messagebox.showwarning("Error", "No available parking spots.")
+                return
+
+            # Assign the first available parking spot
+            assigned_spot = self.available_spots.pop(0)  # Get and remove the first available spot
+            self.parking_data[license_plate] = {'name': name, 'phone': phone, 'spot': assigned_spot}
+            messagebox.showinfo("Confirmation",
+                                f"Car parked successfully!\n\nName: {name}\nPhone: {phone}\nLicense Plate: {license_plate}\nParking Spot: {assigned_spot}")
+            self.clear_inputs()  # Clear input fields after successful action
+
+        elif action == "Retrieve Car":
+            if license_plate in self.parking_data:
+                user_info = self.parking_data[license_plate]
+                # Free the parking spot when retrieving the car
+                self.available_spots.append(user_info['spot'])
+                messagebox.showinfo("Car Retrieved",
+                                    f"Car retrieved successfully!\n\nName: {user_info['name']}\nPhone: {user_info['phone']}\nLicense Plate: {license_plate}\nParking Spot: {user_info['spot']}")
+                del self.parking_data[license_plate]  # Remove the car data
+                self.clear_inputs()  # Clear input fields after successful action
+            else:
+                messagebox.showwarning("Error", "License plate not found. Please check your entry.")
+
+    def clear_inputs(self):
+        """Clear the input fields."""
+        self.name_entry.delete(0, tk.END)
+        self.phone_entry.delete(0, tk.END)
+        self.license_entry.delete(0, tk.END)
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = KioskApp(root)
+    root.mainloop()
