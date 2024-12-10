@@ -1,0 +1,129 @@
+import tkinter as tk
+from tkinter import messagebox
+from PIL import Image, ImageTk
+import aiohttp
+import asyncio
+
+
+class KioskApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Parking Kiosk App")
+
+        # Set up window size and position
+        window_width = 400
+        window_height = 700  
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        position_top = int(screen_height / 2 - window_height / 2)
+        position_right = int(screen_width / 2 - window_width / 2)
+        self.root.geometry(f'{window_width}x{window_height}+{position_right}+{position_top}')
+
+        # Set the background color
+        self.root.configure(bg="#002147")  # Dark blue
+
+        # Load and display the image
+        self.image = Image.open("SmartCar.png")
+        self.photo = ImageTk.PhotoImage(self.image)
+        self.image_label = tk.Label(root, image=self.photo, bg="#002147")
+        self.image_label.pack(pady=10)
+
+        # Create input fields for user data
+        self.name_label = tk.Label(root, text="Name:", font=("Arial", 12), bg="#FFA07A", fg="white")
+        self.name_label.pack(pady=5)
+        self.name_entry = tk.Entry(root, font=("Arial", 12))
+        self.name_entry.pack(pady=5)
+
+        self.phone_label = tk.Label(root, text="Phone Number:", font=("Arial", 12), bg="#FFA07A", fg="white")
+        self.phone_label.pack(pady=5)
+        self.phone_entry = tk.Entry(root, font=("Arial", 12))
+        self.phone_entry.pack(pady=5)
+
+        self.license_label = tk.Label(root, text="License Plate:", font=("Arial", 12), bg="#FFA07A", fg="white")
+        self.license_label.pack(pady=5)
+        self.license_entry = tk.Entry(root, font=("Arial", 12))
+        self.license_entry.pack(pady=5)
+
+        # Create buttons for Park Car and Retrieve Car
+        self.park_button = tk.Button(root, text="Park Car", command=self.park_car, font=("Arial", 14), width=15,
+                                     bg="#FFA07A", fg="white")
+        self.park_button.pack(pady=10)
+
+        self.retrieve_button = tk.Button(root, text="Retrieve Car", command=self.retrieve_car, font=("Arial", 14),
+                                         width=15, bg="#FFA07A", fg="white")
+        self.retrieve_button.pack(pady=10)
+
+        # Set up network (Wi-Fi) connection to Arduino
+        self.server_ip = "http://192.168.1.28"  # IP address
+        self.server_port = 80  # HTTP port of the Arduino (default web servers)
+
+        # Check connection on startup
+        self.check_connection()
+
+    def check_connection(self):
+        try:
+            asyncio.run(self.check_connection_async())
+        except Exception as e:
+            messagebox.showerror("Connection Error", f"Failed to connect to Arduino: {e}")
+
+    async def check_connection_async(self):
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(f"{self.server_ip}/", timeout=60) as response:
+                    if response.status == 200:
+                        messagebox.showinfo("Connection Status", "Connected to Arduino server!")
+                    else:
+                        messagebox.showwarning("Connection Status",
+                                               f"Unable to connect to Arduino server. Status code: {response.status}")
+            except aiohttp.ClientError as e:
+                messagebox.showerror("Connection Error", f"Failed to connect to Arduino: {e}")
+
+    def park_car(self):
+        asyncio.run(self.submit_data("Park Car"))
+
+    def retrieve_car(self):
+        asyncio.run(self.submit_data("Retrieve Car"))
+
+    async def submit_data(self, action):
+        name = self.name_entry.get()
+        phone = self.phone_entry.get()
+        license_plate = self.license_entry.get()
+
+        if not name or not phone or not license_plate:
+            messagebox.showwarning("Input Error", "Please fill out all fields.")
+            return
+
+        # Create the data to send to the Arduino
+        data = {
+            'name': name,
+            'phone': phone,
+            'license_plate': license_plate
+        }
+
+        # Send request based on action (Park or Retrieve)
+        if action == "Park Car":
+            await self.send_request("/park", data)
+        elif action == "Retrieve Car":
+            await self.send_request("/retrieve", data)
+
+    async def send_request(self, endpoint, data):
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(f"{self.server_ip}{endpoint}", json=data, timeout=60) as response:
+                    if response.status == 200:
+                        response_text = await response.text()
+                        if "available" in response_text or "initiated" in response_text:
+                            messagebox.showinfo("Success", response_text)
+                        else:
+                            messagebox.showerror("Error", response_text)
+                    else:
+                        messagebox.showerror("Error",
+                                             f"Failed to communicate with the server. Status code: {response.status}")
+        except aiohttp.ClientError as e:
+            messagebox.showerror("Communication Error", f"Error in communication with Arduino: {e}")
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = KioskApp(root)
+    root.mainloop()
