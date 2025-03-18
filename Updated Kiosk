@@ -12,7 +12,7 @@ class KioskApp:
 
         # Set up window size and position
         window_width = 400
-        window_height = 700  
+        window_height = 700
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
         position_top = int(screen_height / 2 - window_height / 2)
@@ -54,7 +54,7 @@ class KioskApp:
         self.retrieve_button.pack(pady=10)
 
         # Set up network (Wi-Fi) connection to Arduino
-        self.server_ip = "http://192.168.1.28"  # IP address
+        self.server_ip = "http://172.20.10.13"  # IP address
         self.server_port = 80  # HTTP port of the Arduino (default web servers)
 
         # Check connection on startup
@@ -69,7 +69,7 @@ class KioskApp:
     async def check_connection_async(self):
         async with aiohttp.ClientSession() as session:
             try:
-                async with session.get(f"{self.server_ip}/", timeout=60) as response:
+                async with session.get(f"{self.server_ip}/", timeout=120) as response:
                     if response.status == 200:
                         messagebox.showinfo("Connection Status", "Connected to Arduino server!")
                     else:
@@ -111,11 +111,12 @@ class KioskApp:
             async with aiohttp.ClientSession() as session:
                 async with session.post(f"{self.server_ip}{endpoint}", json=data, timeout=60) as response:
                     if response.status == 200:
-                        response_text = await response.text()
-                        if "available" in response_text or "initiated" in response_text:
-                            messagebox.showinfo("Success", response_text)
-                        else:
-                            messagebox.showerror("Error", response_text)
+                        try:
+                            response_json = await response.json()  # Try parsing the response as JSON
+                            message = response_json.get("message", "No message")
+                            messagebox.showinfo("Success", message)
+                        except ValueError:
+                            messagebox.showerror("Error", "Received non-JSON response.")
                     else:
                         messagebox.showerror("Error",
                                              f"Failed to communicate with the server. Status code: {response.status}")
