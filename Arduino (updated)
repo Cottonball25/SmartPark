@@ -1,0 +1,149 @@
+#include <SPI.h>
+#include <WiFi.h>   // Wi-Fi library for communication
+#include <ArduinoJson.h>
+#include <EEPROM.h>  // EEPROM library to store data persistently
+
+// Define constants
+#define MAX_SPOTS 5  // Max parking spots
+
+// Define Wi-Fi credentials
+const char* ssid = "wifi_ssid";
+const char* password = "wifi_password";
+
+// Create a structure to hold parking spot information
+struct ParkingSpot {
+  String name;          // User's name
+  String phone;         // User's phone number
+  String license_plate; // License plate of the car
+  bool occupied;        // Whether the spot is occupied or not
+};
+
+// Create an array to store parking spots
+ParkingSpot parkingSpots[MAX_SPOTS];
+
+// Function to connect to Wi-Fi
+void setup_wifi() {
+  Serial.print("Connecting to WiFi...");
+  WiFi.begin(ssid, password);  // Connect to Wi-Fi
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.print(".");
+  }
+  Serial.println("Connected to WiFi!");
+}
+
+// Function to handle parking the car
+void park_car(String name, String phone, String license_plate) {
+  bool parked = false;
+  for (int i = 0; i < MAX_SPOTS; i++) {
+    if (!parkingSpots[i].occupied) {  // Find an empty spot
+      parkingSpots[i].name = name;
+      parkingSpots[i].phone = phone;
+      parkingSpots[i].license_plate = license_plate;
+      parkingSpots[i].occupied = true;
+      parked = true;
+      break;
+    }
+  }
+
+  if (parked) {
+    Serial.println("Car parked successfully!");
+  } else {
+    Serial.println("No available parking spots.");
+  }
+}
+
+// Function to retrieve the car based on user's name
+void retrieve_car(String name) {
+  bool found = false;
+  for (int i = 0; i < MAX_SPOTS; i++) {
+    if (parkingSpots[i].occupied && parkingSpots[i].name == name) {
+      parkingSpots[i].occupied = false;  // Mark the spot as free
+      Serial.println("Car Retrieved from Spot " + String(i + 1));
+      found = true;
+      break;
+    }
+  }
+  
+  if (!found) {
+    Serial.println("Car not found for this user.");
+  }
+}
+
+// Set up server
+WiFiServer server(80);
+
+void setup() {
+  // Start the Serial communication for debugging
+  Serial.begin(115200);
+  
+  // Set up Wi-Fi
+  setup_wifi();
+
+  // Start the web server
+  server.begin();
+  Serial.println("Server started");
+
+  // Initialize parking spots from EEPROM (optional persistent data)
+  for (int i = 0; i < MAX_SPOTS; i++) {
+    parkingSpots[i].occupied = false;  // Initialize all spots as free
+  }
+}
+
+void loop() {
+  WiFiClient client = server.available();  // Check for client connection
+
+  if (client) {
+    String request = "";
+    while (client.available()) {
+      char c = client.read();
+      request += c;  // Read HTTP request
+    }
+
+    // Handle park and retrieve actions
+    if (request.indexOf("/park") != -1) {
+      String name = "";  // Retrieve user's name from the request
+      String phone = ""; // Retrieve user's phone number from the request
+      String license_plate = "";  // Retrieve license plate from the request
+      // Parse the request data and extract name, phone, and license plate
+      // (Assuming form data sent with POST request)
+      int startName = request.indexOf("name=") + 5;
+      int endName = request.indexOf("&", startName);
+      name = request.substring(startName, endName);
+
+      int startPhone = request.indexOf("phone=") + 6;
+      int endPhone = request.indexOf("&", startPhone);
+      phone = request.substring(startPhone, endPhone);
+
+      int startPlate = request.indexOf("license_plate=") + 14;
+      license_plate = request.substring(startPlate);
+
+      // Call the park_car function with extracted data
+      park_car(name, phone, license_plate);
+
+      client.println("HTTP/1.1 200 OK");
+      client.println("Content-Type: text/plain");
+      client.println();
+      client.println("Car parked successfully!");
+    }
+
+    if (request.indexOf("/retrieve") != -1) {
+      String name = "";  // Retrieve the user's name from the request
+      // Parse the request data to get the name
+      int startName = request.indexOf("name=") + 5;
+      name = request.substring(startName);
+
+      // Call the retrieve_car function with the name
+      retrieve_car(name);
+
+      client.println("HTTP/1.1 200 OK");
+      client.println("Content-Type: text/plain");
+      client.println();
+      client.println("Car retrieval process completed!");
+    }
+
+    delay(1);
+    client.stop();  // Close the client connection
+  }
+}
