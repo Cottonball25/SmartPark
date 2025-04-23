@@ -1,149 +1,272 @@
-#include <SPI.h>
-#include <WiFi.h>   // Wi-Fi library for communication
+#include <WiFiS3.h>
+#include <EEPROM.h>
 #include <ArduinoJson.h>
-#include <EEPROM.h>  // EEPROM library to store data persistently
 
-// Define constants
-#define MAX_SPOTS 5  // Max parking spots
-
-// Define Wi-Fi credentials
-const char* ssid = "wifi_ssid";
-const char* password = "wifi_password";
-
-// Create a structure to hold parking spot information
-struct ParkingSpot {
-  String name;          // User's name
-  String phone;         // User's phone number
-  String license_plate; // License plate of the car
-  bool occupied;        // Whether the spot is occupied or not
-};
-
-// Create an array to store parking spots
-ParkingSpot parkingSpots[MAX_SPOTS];
-
-// Function to connect to Wi-Fi
-void setup_wifi() {
-  Serial.print("Connecting to WiFi...");
-  WiFi.begin(ssid, password);  // Connect to Wi-Fi
-
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(1000);
-    Serial.print(".");
-  }
-  Serial.println("Connected to WiFi!");
-}
-
-// Function to handle parking the car
-void park_car(String name, String phone, String license_plate) {
-  bool parked = false;
-  for (int i = 0; i < MAX_SPOTS; i++) {
-    if (!parkingSpots[i].occupied) {  // Find an empty spot
-      parkingSpots[i].name = name;
-      parkingSpots[i].phone = phone;
-      parkingSpots[i].license_plate = license_plate;
-      parkingSpots[i].occupied = true;
-      parked = true;
-      break;
-    }
-  }
-
-  if (parked) {
-    Serial.println("Car parked successfully!");
-  } else {
-    Serial.println("No available parking spots.");
-  }
-}
-
-// Function to retrieve the car based on user's name
-void retrieve_car(String name) {
-  bool found = false;
-  for (int i = 0; i < MAX_SPOTS; i++) {
-    if (parkingSpots[i].occupied && parkingSpots[i].name == name) {
-      parkingSpots[i].occupied = false;  // Mark the spot as free
-      Serial.println("Car Retrieved from Spot " + String(i + 1));
-      found = true;
-      break;
-    }
-  }
-  
-  if (!found) {
-    Serial.println("Car not found for this user.");
-  }
-}
-
-// Set up server
+const char* ssid = "Link4 Guest_EXT";
 WiFiServer server(80);
 
-void setup() {
-  // Start the Serial communication for debugging
-  Serial.begin(115200);
-  
-  // Set up Wi-Fi
-  setup_wifi();
+const int TOTAL_SPOTS = 5;
+const int trigPins[TOTAL_SPOTS] = {2, 4, 6, 8, 10};
+const int echoPins[TOTAL_SPOTS] = {3, 5, 7, 9, 11};
+const char* colorList[TOTAL_SPOTS] = {"PINK", "ORANGE", "BLUE", "YELLOW", "WHITE"};
+const int OCCUPIED_THRESHOLD_CM = 30;
 
-  // Start the web server
-  server.begin();
-  Serial.println("Server started");
+struct CarInfo {
+  char name[30];
+  char licensePlate[15];
+  char phone[15];
+  char color[10];
+  int spotNumber;
+  bool isOccupied;
+};
 
-  // Initialize parking spots from EEPROM (optional persistent data)
-  for (int i = 0; i < MAX_SPOTS; i++) {
-    parkingSpots[i].occupied = false;  // Initialize all spots as free
+CarInfo parkedCars[TOTAL_SPOTS];
+
+void saveToEEPROM() {
+  for (int i = 0; i < TOTAL_SPOTS; i++) {
+    EEPROM.put(i * sizeof(CarInfo), parkedCars[i]);
   }
 }
 
+void loadFromEEPROM() {
+  for (int i = 0; i < TOTAL_SPOTS; i++) {
+    EEPROM.get(i * sizeof(CarInfo), parkedCars[i]);
+  }
+}
+
+void resetSpots() {
+  for (int i = 0; i < TOTAL_SPOTS; i++) {
+    memset(&parkedCars[i], 0, sizeof(CarInfo));
+    parkedCars[i].isOccupied = false;
+    parkedCars[i].spotNumber = i + 1;
+  }
+  saveToEEPROM();
+  Serial.println("All spots reset.");
+}
+
+long readDistanceCM(int trigPin, int echoPin) {
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+  long duration = pulseIn(echoPin, HIGH, 30000);
+  return duration * 0.034 / 2;
+}
+
+void sendJsonResponse(WiFiClient& client, const String& message, const String& color = "") {
+  client.println("HTTP/1.1 200 OK");
+  client.println("Content-Type: application/json");
+  client.println("Connection: close");
+  client.println();
+  client.print("{\"message\":\"" + message + "\"");
+  if (color != "") {
+    client.print(", \"color\":\"" + color + "\"");
+  }
+  client.println("}");
+}
+
+String extractParam(String request, const String& key) {
+  int idx = request.indexOf(key + "=");
+  if (idx == -1) return "";
+  int end = request.indexOf("&", idx);
+  if (end == -1) end = request.indexOf(" ", idx);
+  return request.substring(idx + key.length() + 1, end);
+}
+
+void handleParkCar(WiFiClient& client, String request) {
+  while (client.available() == 0) {}
+  String body = client.readStringUntil('\n');
+  StaticJsonDocument<256> doc;
+  DeserializationError error = deserializeJson(doc, body);
+  if (error) {
+    sendJsonResponse(client, "Invalid JSON");
+    return;
+  }
+
+  String name = doc["username"] | "";
+  String license = doc["licensePlate"] | "";
+  String phone = doc["phone"] | "";
+
+  Serial.println("Park Request:");
+  Serial.println("Username: " + name);
+  Serial.println("Plate: " + license);
+
+  for (int i = 0; i < TOTAL_SPOTS; i++) {
+    long distance = readDistanceCM(trigPins[i], echoPins[i]);
+    bool physicallyEmpty = (distance == 0 || distance > OCCUPIED_THRESHOLD_CM);
+
+    if (!parkedCars[i].isOccupied && physicallyEmpty) {
+      strncpy(parkedCars[i].name, name.c_str(), sizeof(parkedCars[i].name));
+      parkedCars[i].name[sizeof(parkedCars[i].name) - 1] = '\0';
+
+      strncpy(parkedCars[i].licensePlate, license.c_str(), sizeof(parkedCars[i].licensePlate));
+      parkedCars[i].licensePlate[sizeof(parkedCars[i].licensePlate) - 1] = '\0';
+
+      strncpy(parkedCars[i].phone, phone.c_str(), sizeof(parkedCars[i].phone));
+      parkedCars[i].phone[sizeof(parkedCars[i].phone) - 1] = '\0';
+
+      strncpy(parkedCars[i].color, colorList[i], sizeof(parkedCars[i].color));
+      parkedCars[i].color[sizeof(parkedCars[i].color) - 1] = '\0';
+
+      parkedCars[i].spotNumber = i + 1;
+      parkedCars[i].isOccupied = true;
+      saveToEEPROM();
+
+      Serial.print("Assigned to spot "); Serial.println(i + 1);
+      sendJsonResponse(client, "Car parked at spot " + String(i + 1), colorList[i]);
+      return;
+    }
+  }
+
+  sendJsonResponse(client, "No available physical spots");
+}
+
+void handleRetrieveCar(WiFiClient& client, String request) {
+  String username = extractParam(request, "username");
+  String plate = extractParam(request, "licensePlate");
+
+  Serial.println("Retrieve Request:");
+  Serial.println("Username: " + username);
+  Serial.println("Plate: " + plate);
+
+  for (int i = 0; i < TOTAL_SPOTS; i++) {
+    Serial.print("Checking spot "); Serial.print(i + 1);
+    Serial.print(" | Name: "); Serial.print(parkedCars[i].name);
+    Serial.print(" | Plate: "); Serial.print(parkedCars[i].licensePlate);
+    Serial.print(" | Occupied: "); Serial.println(parkedCars[i].isOccupied);
+
+    if (parkedCars[i].isOccupied &&
+        String(parkedCars[i].name).equalsIgnoreCase(username) &&
+        String(parkedCars[i].licensePlate).equalsIgnoreCase(plate)) {
+      parkedCars[i].isOccupied = false;
+      saveToEEPROM();
+      sendJsonResponse(client, "Car retrieved from spot " + String(parkedCars[i].spotNumber));
+      return;
+    }
+  }
+
+  sendJsonResponse(client, "Car not found");
+}
+
+void setup() {
+  Serial.begin(115200);
+  loadFromEEPROM();
+
+  for (int i = 0; i < TOTAL_SPOTS; i++) {
+    pinMode(trigPins[i], OUTPUT);
+    pinMode(echoPins[i], INPUT);
+  }
+
+  IPAddress local_ip(192, 168, 50, 77);
+  IPAddress gateway(192, 168, 50, 21);
+  IPAddress subnet(255, 255, 255, 0);
+  WiFi.config(local_ip, gateway, subnet);
+
+  WiFi.begin(ssid);
+  Serial.print("Connecting to WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500); Serial.print(".");
+  }
+
+  Serial.println("\n WiFi Connected");
+  Serial.print("IP Address: "); Serial.println(WiFi.localIP());
+  server.begin();
+}
+
+// void loop() {
+//   WiFiClient client = server.available();
+//   if (client) {
+//     Serial.println(" Client connected");
+//     String request = "";
+
+//     while (client.connected()) {
+//       if (client.available()) {
+//         char c = client.read();
+//         request += c;
+//         if (request.endsWith("\r\n\r\n")) break;
+//       }
+//     }
+
+//     if (request.indexOf("GET / ") >= 0) {
+//       sendJsonResponse(client, "Arduino Parking Server Ready");
+//     } else if (request.indexOf("POST /park") >= 0) {
+//       handleParkCar(client, request);
+//     } else if (request.indexOf("GET /retrieve") >= 0) {
+//       handleRetrieveCar(client, request);
+//     } else if (request.indexOf("GET /reset") >= 0) {
+//       resetSpots();
+//       sendJsonResponse(client, "All spots reset");
+//     } else {
+//       sendJsonResponse(client, "Not Found");
+//     }
+
+//     delay(1);
+//     client.stop();
+//     Serial.println("Client disconnected");
+//   }
+// }
 void loop() {
-  WiFiClient client = server.available();  // Check for client connection
-
+  WiFiClient client = server.available();
   if (client) {
+    Serial.println(" Client connected");
     String request = "";
-    while (client.available()) {
-      char c = client.read();
-      request += c;  // Read HTTP request
+
+    while (client.connected()) {
+      if (client.available()) {
+        char c = client.read();
+        request += c;
+        if (request.endsWith("\r\n\r\n")) break;
+      }
     }
 
-    // Handle park and retrieve actions
-    if (request.indexOf("/park") != -1) {
-      String name = "";  // Retrieve user's name from the request
-      String phone = ""; // Retrieve user's phone number from the request
-      String license_plate = "";  // Retrieve license plate from the request
-      // Parse the request data and extract name, phone, and license plate
-      // (Assuming form data sent with POST request)
-      int startName = request.indexOf("name=") + 5;
-      int endName = request.indexOf("&", startName);
-      name = request.substring(startName, endName);
-
-      int startPhone = request.indexOf("phone=") + 6;
-      int endPhone = request.indexOf("&", startPhone);
-      phone = request.substring(startPhone, endPhone);
-
-      int startPlate = request.indexOf("license_plate=") + 14;
-      license_plate = request.substring(startPlate);
-
-      // Call the park_car function with extracted data
-      park_car(name, phone, license_plate);
-
-      client.println("HTTP/1.1 200 OK");
-      client.println("Content-Type: text/plain");
-      client.println();
-      client.println("Car parked successfully!");
-    }
-
-    if (request.indexOf("/retrieve") != -1) {
-      String name = "";  // Retrieve the user's name from the request
-      // Parse the request data to get the name
-      int startName = request.indexOf("name=") + 5;
-      name = request.substring(startName);
-
-      // Call the retrieve_car function with the name
-      retrieve_car(name);
-
-      client.println("HTTP/1.1 200 OK");
-      client.println("Content-Type: text/plain");
-      client.println();
-      client.println("Car retrieval process completed!");
+    if (request.indexOf("GET / ") >= 0) {
+      sendUserInfo(client);
+    } else if (request.indexOf("POST /park") >= 0) {
+      handleParkCar(client, request);
+    } else if (request.indexOf("GET /retrieve") >= 0) {
+      handleRetrieveCar(client, request);
+    } else if (request.indexOf("GET /reset") >= 0) {
+      resetSpots();
+      sendJsonResponse(client, "All spots reset");
+    } else {
+      sendJsonResponse(client, "Not Found");
     }
 
     delay(1);
-    client.stop();  // Close the client connection
+    client.stop();
+    Serial.println(" Client disconnected");
   }
 }
+
+void sendUserInfo(WiFiClient& client) {
+  for (int i = 0; i < TOTAL_SPOTS; i++) {
+    if (parkedCars[i].isOccupied) {
+      client.println("HTTP/1.1 200 OK");
+      client.println("Content-Type: application/json");
+      client.println("Connection: close");
+      client.println();
+
+      client.print("{");
+      client.print("\"name\":\"");
+      client.print(parkedCars[i].name);
+      client.print("\",\"phone\":\"");
+      client.print(parkedCars[i].phone);
+      client.print("\",\"license_plate\":\"");
+      client.print(parkedCars[i].licensePlate);
+      client.print("\",\"color\":\"");
+      client.print(parkedCars[i].color);
+      client.println("\"}");
+      return;
+    }
+  }
+
+  // If no car is parked yet
+  client.println("HTTP/1.1 200 OK");
+  client.println("Content-Type: application/json");
+  client.println("Connection: close");
+  client.println();
+  client.println("{\"name\":null,\"phone\":null,\"license_plate\":null,\"color\":\"NONE\"}");
+}
+
+
